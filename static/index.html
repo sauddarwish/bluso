@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#24262b">
+  <title>Bluso — Local model observability</title>
+  <meta name="description" content="See your local language model think, sample and run — in real time.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="Bluso home">
+        <span class="wordmark">_bluso.</span>
+        <small>local model observatory</small>
+      </a>
+
+      <div class="eyebrow">Connected model</div>
+      <button class="model-card" id="modelCard" type="button">
+        <span class="model-icon"><i></i></span>
+        <span class="model-copy"><strong id="modelName">Discovering…</strong><small id="modelMeta">Local runtime scan</small></span>
+        <span class="chevron">⌄</span>
+      </button>
+
+      <nav aria-label="Main navigation">
+        <button class="nav-item active" data-view="observatory"><span>01</span> Observatory <i></i></button>
+        <button class="nav-item" data-view="model"><span>02</span> Model anatomy</button>
+        <button class="nav-item" data-view="runtime"><span>03</span> Runtime</button>
+        <button class="nav-item" data-view="logs"><span>04</span> Event log</button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="system-mini">
+          <div><span>Host system</span><b id="hostName">Local</b></div>
+          <div class="mini-row"><span>CPU</span><div class="mini-meter"><i id="cpuMini"></i></div><b id="cpuText">—</b></div>
+          <div class="mini-row"><span>RAM</span><div class="mini-meter"><i id="ramMini"></i></div><b id="ramText">—</b></div>
+        </div>
+        <div class="privacy"><span></span><div><strong>Runs locally</strong><small>No inference data leaves this machine</small></div></div>
+        <div class="made-by">Made with <span aria-label="love">♥</span> by <a href="https://github.com/sauddarwish" target="_blank" rel="noopener noreferrer" aria-label="Saud Darwish on GitHub">Saud Darwish <i aria-hidden="true">↗</i></a></div>
+      </div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div>
+          <div class="crumb"><span>Bluso</span><i>/</i> Observatory</div>
+          <h1>Model observatory <span class="live-pill"><i></i> Connected</span></h1>
+        </div>
+        <div class="top-actions">
+          <div class="runtime-select-wrap">
+            <span>Runtime</span>
+            <select id="runtimeSelect" aria-label="Runtime"><option>Scanning…</option></select>
+          </div>
+          <button class="icon-button" id="refreshButton" title="Rescan runtimes">↻</button>
+          <button class="start-button" id="startRuntime">Start Saluki</button>
+        </div>
+      </header>
+
+      <div class="tech-strip" aria-label="Active instrumentation">
+        <span>transport <b>SSE / NDJSON</b></span>
+        <span>endpoint <b id="endpointBadge">scanning</b></span>
+        <span>context <b id="techContext">—</b></span>
+        <span>sampling <b>top-10 logits</b></span>
+        <span class="loopback">scope <b>127.0.0.1</b></span>
+      </div>
+
+      <section class="notice hidden" id="notice"><i>!</i><span id="noticeText"></span><button id="noticeClose">×</button></section>
+
+      <section class="view active" id="view-observatory">
+        <div class="metrics-grid">
+          <article class="metric primary"><span>Token velocity</span><strong><em id="tokenSpeed">0.0</em> tok/s</strong><div class="spark"><svg viewBox="0 0 180 42" preserveAspectRatio="none"><polyline id="speedLine" points="0,40 180,40"/></svg></div><small id="speedDelta">Waiting for inference</small></article>
+          <article class="metric"><span>Context window</span><strong><em id="contextUsed">0</em> / <b id="contextMax">—</b></strong><div class="seg-meter" id="contextMeter"></div><small id="contextPercent">0% utilized</small></article>
+          <article class="metric"><span>Model memory</span><strong><em id="modelMemory">—</em></strong><div class="bar-meter"><i id="memoryBar"></i></div><small id="memoryCaption">Unified system memory</small></article>
+          <article class="metric"><span>Generation latency</span><strong><em id="latency">—</em></strong><div class="latency-row"><i></i><span id="latencyDetail">No completed run</span></div><small>Per generated token</small></article>
+        </div>
+
+        <div class="workbench">
+          <section class="console panel">
+            <div class="panel-head">
+              <div><span class="panel-kicker">Inference</span><h2>Generation stream</h2></div>
+              <div class="status-dot" id="generationStatus"><i></i><span>Idle</span></div>
+            </div>
+            <div class="reasoning-wrap hidden" id="reasoningWrap">
+              <div class="reasoning-label">Model-emitted reasoning <small>Not hidden activations</small></div>
+              <div id="reasoningText"></div>
+            </div>
+            <div class="output" id="output" aria-live="polite"><span class="placeholder">Model output will appear here. Send a prompt to begin a traced inference run.</span></div>
+            <div class="composer">
+              <label for="prompt">Prompt</label>
+              <textarea id="prompt" rows="3" placeholder="Ask Saluki anything…">Explain in simple terms why the sky is blue, then give one surprising fact.</textarea>
+              <div class="composer-bottom">
+                <div class="sliders">
+                  <label>Temperature <b id="tempValue">0.80</b><input id="temperature" type="range" min="0" max="2" step="0.05" value="0.8"></label>
+                  <label>Max tokens <b id="tokensValue">256</b><input id="maxTokens" type="range" min="16" max="1024" step="16" value="256"></label>
+                </div>
+                <button id="generateButton" class="generate">Run inference <span>→</span></button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="prob-panel panel">
+            <div class="panel-head compact">
+              <div><span class="panel-kicker">Next token</span><h2>Token probabilities</h2></div>
+              <button class="pause-button" id="freezeProb" title="Freeze probabilities">Ⅱ</button>
+            </div>
+            <div class="chosen-token">
+              <span>Selected token</span>
+              <strong id="chosenToken">—</strong>
+              <div><b id="chosenProb">0.00%</b><small id="chosenId">Token ID —</small></div>
+            </div>
+            <ol class="prob-list" id="probList"></ol>
+            <div class="distribution-stats">
+              <div><span>Entropy</span><b id="entropy">—</b></div>
+              <div><span>Confidence</span><b id="confidence">—</b></div>
+              <div><span>Sample</span><b id="sampleNumber">0</b></div>
+            </div>
+            <p class="data-note" id="probNote"><i></i> Logits are transformed to probabilities from the active backend’s real token distribution.</p>
+          </aside>
+        </div>
+
+        <section class="token-trace panel">
+          <div class="panel-head compact"><div><span class="panel-kicker">Sequence</span><h2>Token trace</h2></div><div class="trace-legend"><span><i class="high"></i>High confidence</span><span><i class="low"></i>Low confidence</span></div></div>
+          <div class="token-ribbon" id="tokenRibbon"><span class="empty-trace">No tokens sampled yet</span></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-model">
+        <div class="detail-grid">
+          <section class="panel anatomy-card">
+            <div class="panel-head"><div><span class="panel-kicker">GGUF metadata</span><h2>Model anatomy</h2></div><span class="actual-badge">Read from file</span></div>
+            <div class="anatomy-summary" id="anatomySummary"></div>
+            <div class="layer-title"><span>Transformer blocks</span><b id="layerCount">—</b></div>
+            <div class="layers" id="layers"></div>
+            <p class="explain">Layer count, embedding width, attention heads and context length come directly from the GGUF header. Activation values are not exposed by standard llama.cpp or Ollama APIs.</p>
+          </section>
+          <section class="panel raw-card"><div class="panel-head compact"><div><span class="panel-kicker">Model</span><h2>Raw metadata</h2></div></div><pre id="rawMetadata">Discovering model…</pre></section>
+        </div>
+      </section>
+
+      <section class="view" id="view-runtime">
+        <div class="runtime-grid" id="runtimeGrid"></div>
+      </section>
+
+      <section class="view" id="view-logs">
+        <section class="panel logs-card"><div class="panel-head"><div><span class="panel-kicker">llama.cpp</span><h2>Runtime event log</h2></div><button class="ghost-button" id="reloadLogs">Refresh</button></div><pre id="logs">No events yet.</pre></section>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
