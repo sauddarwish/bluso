@@ -46,7 +46,7 @@
       <header class="topbar">
         <div>
           <div class="crumb"><span>Bluso</span><i>/</i> Observatory</div>
-          <h1>Model observatory <span class="live-pill"><i></i> Connected</span></h1>
+          <h1>Observatory <span class="live-pill"><i></i> Connected</span></h1>
         </div>
         <div class="top-actions">
           <div class="runtime-select-wrap">
@@ -80,7 +80,11 @@
           <section class="console panel">
             <div class="panel-head">
               <div><span class="panel-kicker">Inference</span><h2>Generation stream</h2></div>
-              <div class="status-dot" id="generationStatus"><i></i><span>Idle</span></div>
+              <div class="panel-actions">
+                <label class="replay-speed" for="replaySpeed"><span>Speed</span><select id="replaySpeed" aria-label="Replay speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+                <button class="replay-button" id="replayButton" type="button" disabled><span aria-hidden="true">↻</span> Replay</button>
+                <div class="status-dot" id="generationStatus"><i></i><span>Idle</span></div>
+              </div>
             </div>
             <div class="reasoning-wrap hidden" id="reasoningWrap">
               <div class="reasoning-label">Model-emitted reasoning <small>Not hidden activations</small></div>
@@ -131,16 +135,43 @@
           <section class="panel anatomy-card">
             <div class="panel-head"><div><span class="panel-kicker">GGUF metadata</span><h2>Model anatomy</h2></div><span class="actual-badge">Read from file</span></div>
             <div class="anatomy-summary" id="anatomySummary"></div>
+            <div class="model-spec-grid">
+              <section><span>Architecture</span><dl id="architectureDetails"></dl></section>
+              <section><span>Attention + SSM</span><dl id="attentionDetails"></dl></section>
+              <section><span>Tokenizer</span><dl id="tokenizerDetails"></dl></section>
+            </div>
             <div class="layer-title"><span>Transformer blocks</span><b id="layerCount">—</b></div>
             <div class="layers" id="layers"></div>
             <p class="explain">Layer count, embedding width, attention heads and context length come directly from the GGUF header. Activation values are not exposed by standard llama.cpp or Ollama APIs.</p>
           </section>
           <section class="panel raw-card"><div class="panel-head compact"><div><span class="panel-kicker">Model</span><h2>Raw metadata</h2></div></div><pre id="rawMetadata">Discovering model…</pre></section>
         </div>
+
+        <section class="panel quant-card">
+          <div class="panel-head"><div><span class="panel-kicker">Storage profile</span><h2>Quantization map</h2></div><div class="quant-summary" id="quantizationSummary">—</div></div>
+          <div class="quant-bars" id="quantizationBars"></div>
+        </section>
+
+        <section class="panel largest-card">
+          <div class="panel-head compact"><div><span class="panel-kicker">Storage hotspots</span><h2>Largest tensors</h2></div></div>
+          <div class="largest-tensors" id="largestTensors"></div>
+        </section>
+
+        <section class="panel tensor-card">
+          <div class="panel-head tensor-head">
+            <div><span class="panel-kicker">Complete GGUF directory</span><h2>Tensor explorer <small id="tensorCountLabel">—</small></h2></div>
+            <div class="tensor-controls"><input id="tensorSearch" type="search" placeholder="Filter tensor name…" aria-label="Filter tensors by name"><select id="tensorTypeFilter" aria-label="Filter tensors by type"><option value="">All types</option></select></div>
+          </div>
+          <div class="tensor-table-wrap">
+            <table class="tensor-table"><thead><tr><th>#</th><th>Tensor</th><th>Shape</th><th>Type</th><th>Elements</th><th>Stored</th><th>BPW</th><th>Offset</th></tr></thead><tbody id="tensorTableBody"></tbody></table>
+          </div>
+          <div class="tensor-footer" id="tensorMatchCount">—</div>
+        </section>
       </section>
 
       <section class="view" id="view-runtime">
         <div class="runtime-grid" id="runtimeGrid"></div>
+        <section class="panel runtime-deep-card"><div class="panel-head"><div><span class="panel-kicker">Live llama.cpp state</span><h2>Runtime internals</h2></div><span class="actual-badge">Live endpoint data</span></div><div id="runtimeDeepData" class="runtime-deep-data"></div></section>
       </section>
 
       <section class="view" id="view-logs">

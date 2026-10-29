@@ -40,6 +40,16 @@ MODEL_SUFFIXES = {".gguf"}
 DISCOVERY_TTL = 12.0
 GGUF_STRING = 8
 GGUF_ARRAY = 9
+GGML_TYPE_NAMES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 6: "Q5_0", 7: "Q5_1",
+    8: "Q8_0", 9: "Q8_1", 10: "Q2_K", 11: "Q3_K", 12: "Q4_K",
+    13: "Q5_K", 14: "Q6_K", 15: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS",
+    18: "IQ3_XXS", 19: "IQ1_S", 20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S",
+    23: "IQ4_XS", 24: "I8", 25: "I16", 26: "I32", 27: "I64", 28: "F64",
+    29: "IQ1_M", 30: "BF16", 31: "Q4_0_4_4", 32: "Q4_0_4_8",
+    33: "Q4_0_8_8", 34: "TQ1_0", 35: "TQ2_0", 36: "IQ4_NL_4_4",
+    37: "IQ4_NL_4_8", 38: "IQ4_NL_8_8",
+}
 
 
 def now_ms() -> int:
@@ -101,7 +111,7 @@ def human_bytes(value: int) -> str:
 
 
 class GGUFReader:
-    """Reads GGUF metadata only; tensor payloads are never loaded into memory."""
+    """Reads GGUF metadata and tensor descriptors without loading tensor payloads."""
 
     scalar_formats = {
         0: "B", 1: "b", 2: "H", 3: "h", 4: "I", 5: "i",
@@ -165,9 +175,40 @@ class GGUFReader:
                 key = self._string()
                 kind = struct.unpack("<I", self._read(4))[0]
                 value = self._value(kind)
-                if not key.startswith("tokenizer.ggml.tokens") and not key.startswith("tokenizer.ggml.merges"):
+                if key in {"tokenizer.ggml.tokens", "tokenizer.ggml.merges"} and isinstance(value, dict):
                     metadata[key] = value
-            return {"gguf_version": version, "tensor_count": tensor_count, "metadata": metadata}
+                elif not key.startswith("tokenizer.ggml.tokens") and not key.startswith("tokenizer.ggml.merges"):
+                    metadata[key] = value
+            tensors: List[Dict[str, Any]] = []
+            if tensor_count > 10_000_000:
+                raise ValueError("Implausible GGUF tensor count")
+            for index in range(tensor_count):
+                name = self._string()
+                dimensions_count = struct.unpack("<I", self._read(4))[0]
+                if dimensions_count > 8:
+                    raise ValueError("Implausible GGUF tensor dimensions")
+                shape = [self._u64() for _ in range(dimensions_count)]
+                tensor_type = struct.unpack("<I", self._read(4))[0]
+                offset = self._u64()
+                elements = math.prod(shape) if shape else 0
+                tensors.append({
+                    "index": index, "name": name, "shape": shape, "dimensions": dimensions_count,
+                    "type_id": tensor_type, "type": GGML_TYPE_NAMES.get(tensor_type, f"TYPE_{tensor_type}"),
+                    "offset": offset, "elements": elements,
+                })
+            alignment = int(metadata.get("general.alignment", 32) or 32)
+            descriptor_end = self.handle.tell()
+            data_offset = ((descriptor_end + alignment - 1) // alignment) * alignment
+            ordered = sorted(tensors, key=lambda item: item["offset"])
+            file_size = self.path.stat().st_size
+            for index, tensor in enumerate(ordered):
+                end = ordered[index + 1]["offset"] if index + 1 < len(ordered) else max(tensor["offset"], file_size - data_offset)
+                stored_bytes = max(0, end - tensor["offset"])
+                tensor["stored_bytes"] = stored_bytes
+                tensor["bits_per_element"] = round(stored_bytes * 8 / tensor["elements"], 4) if tensor["elements"] else None
+            return {"gguf_version": version, "tensor_count": tensor_count, "metadata_count": metadata_count,
+                    "metadata": metadata, "tensors": tensors, "alignment": alignment,
+                    "descriptor_end": descriptor_end, "data_offset": data_offset}
 
 
 def summarize_gguf(path: Path) -> Dict[str, Any]:
@@ -180,21 +221,29 @@ def summarize_gguf(path: Path) -> Dict[str, Any]:
     try:
         parsed = GGUFReader(path).read()
         meta = parsed["metadata"]
+        tensors = parsed["tensors"]
         arch = str(meta.get("general.architecture", "unknown"))
         prefix = arch + "."
         parameter_count = meta.get("general.parameter_count")
+        tensor_elements = sum(item["elements"] for item in tensors)
         if parameter_count is None:
-            size_label = str(meta.get("general.size_label", ""))
-            size_match = re.fullmatch(r"([\d.]+)\s*([BM])", size_label, re.IGNORECASE)
-            if size_match:
-                parameter_count = int(float(size_match.group(1)) * (1_000_000_000 if size_match.group(2).upper() == "B" else 1_000_000))
+            parameter_count = tensor_elements or None
         compact_metadata = {}
         for key, value in meta.items():
-            if isinstance(value, (list, dict)):
-                continue
             if isinstance(value, str) and len(value) > 2000:
                 value = f"<omitted {len(value):,}-character value>"
             compact_metadata[key] = value
+        type_totals: Dict[str, Dict[str, Any]] = {}
+        for tensor in tensors:
+            bucket = type_totals.setdefault(tensor["type"], {"type": tensor["type"], "type_id": tensor["type_id"],
+                                                               "tensors": 0, "elements": 0, "stored_bytes": 0})
+            bucket["tensors"] += 1
+            bucket["elements"] += tensor["elements"]
+            bucket["stored_bytes"] += tensor["stored_bytes"]
+        tensor_types = sorted(type_totals.values(), key=lambda item: item["stored_bytes"], reverse=True)
+        for item in tensor_types:
+            item["share"] = item["stored_bytes"] / max(1, stat.st_size)
+            item["bits_per_element"] = round(item["stored_bytes"] * 8 / item["elements"], 4) if item["elements"] else None
         result.update({
             "display_name": meta.get("general.name", path.stem),
             "architecture": arch,
@@ -207,8 +256,35 @@ def summarize_gguf(path: Path) -> Dict[str, Any]:
             "attention_kv_heads": meta.get(prefix + "attention.head_count_kv"),
             "feed_forward": meta.get(prefix + "feed_forward_length"),
             "rope_dimensions": meta.get(prefix + "rope.dimension_count"),
+            "rope_frequency_base": meta.get(prefix + "rope.freq_base"),
+            "attention_key_length": meta.get(prefix + "attention.key_length"),
+            "attention_value_length": meta.get(prefix + "attention.value_length"),
+            "attention_norm_epsilon": meta.get(prefix + "attention.layer_norm_rms_epsilon"),
+            "ssm_state_size": meta.get(prefix + "ssm.state_size"),
+            "ssm_inner_size": meta.get(prefix + "ssm.inner_size"),
+            "ssm_conv_kernel": meta.get(prefix + "ssm.conv_kernel"),
+            "ssm_group_count": meta.get(prefix + "ssm.group_count"),
+            "full_attention_interval": meta.get(prefix + "full_attention_interval"),
+            "mtp_layers": meta.get(prefix + "nextn_predict_layers"),
             "vocab_size": meta.get("tokenizer.ggml.tokens", {}).get("count") if isinstance(meta.get("tokenizer.ggml.tokens"), dict) else None,
-            "tensor_count": parsed["tensor_count"], "gguf_version": parsed["gguf_version"],
+            "tokenizer_model": meta.get("tokenizer.ggml.model"),
+            "tokenizer_pretokenizer": meta.get("tokenizer.ggml.pre"),
+            "bos_token_id": meta.get("tokenizer.ggml.bos_token_id"),
+            "eos_token_id": meta.get("tokenizer.ggml.eos_token_id"),
+            "padding_token_id": meta.get("tokenizer.ggml.padding_token_id"),
+            "base_model": meta.get("general.base_model.0.name"),
+            "organization": meta.get("general.base_model.0.organization"),
+            "license": meta.get("general.license"),
+            "description": meta.get("general.description"),
+            "size_label": meta.get("general.size_label"),
+            "tensor_count": parsed["tensor_count"], "metadata_count": parsed["metadata_count"],
+            "gguf_version": parsed["gguf_version"], "alignment": parsed["alignment"],
+            "descriptor_bytes": parsed["data_offset"], "payload_bytes": max(0, stat.st_size - parsed["data_offset"]),
+            "tensor_elements": tensor_elements,
+            "effective_bits_per_weight": round(stat.st_size * 8 / parameter_count, 4) if parameter_count else None,
+            "tensor_types": tensor_types,
+            "largest_tensors": sorted(tensors, key=lambda item: item["stored_bytes"], reverse=True)[:24],
+            "tensors": tensors,
             "metadata": compact_metadata,
         })
     except Exception as exc:
@@ -486,10 +562,7 @@ def telemetry() -> Dict[str, Any]:
             item["slots"] = safe_get(base + "/slots")
             raw_metrics = fetch_text(base + "/metrics")
             item["metrics"] = parse_prometheus(raw_metrics) if raw_metrics else {}
-            props = safe_get(base + "/props") or {}
-            item["props"] = {key: props.get(key) for key in
-                             ("model_alias", "model_ftype", "model_path", "modalities", "build_info", "is_sleeping")}
-            item["props"]["n_ctx"] = (props.get("default_generation_settings") or {}).get("n_ctx")
+            item["props"] = safe_get(base + "/props") or {}
         elif runtime["kind"] == "ollama":
             item["running"] = safe_get(base + "/api/ps")
         runtime_details.append(item)
