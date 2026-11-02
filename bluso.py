@@ -313,7 +313,6 @@ class Discovery:
     def model_paths(self) -> List[Path]:
         home = Path.home()
         roots = [
-            home / "Downloads/AIlocalMLengineering",
             home / "Downloads", home / "Models", home / "models",
             home / "Library/Application Support/LM Studio/models",
             home / ".cache/lm-studio/models",
@@ -336,7 +335,7 @@ class Discovery:
                             results.append(path)
             except OSError:
                 continue
-        return sorted(results, key=lambda p: ("saluki" not in p.name.lower(), p.name.lower()))[:40]
+        return sorted(results, key=lambda path: path.name.lower())[:40]
 
     def probe_runtime(self, kind: str, base: str) -> Optional[Runtime]:
         if kind == "ollama":
@@ -397,11 +396,10 @@ RUNTIME_LOCK = threading.Lock()
 BOOT_LOG = STATE_DIR / "llama.log"
 
 
-def default_saluki(discovery: Optional[Dict[str, Any]] = None) -> Optional[str]:
+def default_model(discovery: Optional[Dict[str, Any]] = None) -> Optional[str]:
     data = discovery or DISCOVERY.discover()
     models = data.get("models", [])
-    preferred = next((m for m in models if "saluki" in m.get("name", "").lower()), None)
-    return preferred.get("path") if preferred else (models[0].get("path") if models else None)
+    return models[0].get("path") if models else None
 
 
 def start_llamacpp(model_path: Optional[str] = None, port: int = 8081) -> Dict[str, Any]:
@@ -410,7 +408,7 @@ def start_llamacpp(model_path: Optional[str] = None, port: int = 8081) -> Dict[s
         if port_open("127.0.0.1", port):
             return {"ok": True, "state": "already-running", "url": f"http://127.0.0.1:{port}"}
         discovery = DISCOVERY.discover(force=True)
-        path = model_path or default_saluki(discovery)
+        path = model_path or default_model(discovery)
         binaries = discovery.get("binaries", {}).get("llamacpp", [])
         if not path or not Path(path).is_file():
             return {"ok": False, "error": "No GGUF model was found"}
@@ -817,7 +815,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Local-first LLM observability console")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=3417)
-    parser.add_argument("--auto-start", action="store_true", help="Start the discovered Saluki GGUF with llama.cpp")
+    parser.add_argument("--auto-start", action="store_true", help="Start the first discovered AI model with llama.cpp")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     if args.auto_start:

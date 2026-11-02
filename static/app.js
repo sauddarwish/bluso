@@ -29,7 +29,7 @@ function selectedRuntime() { return state.discovery?.runtimes?.find(r => r.id ==
 
 function renderDiscovery(data) {
   state.discovery = data;
-  state.activeModel = data.models?.find(m => /saluki/i.test(m.name)) || data.models?.[0] || null;
+  state.activeModel = data.models?.[0] || null;
   const model = state.activeModel;
   $('#modelName').textContent = model?.display_name || model?.name || 'No GGUF found';
   $('#modelMeta').textContent = model ? `${model.size} · ${model.architecture || 'GGUF'}` : 'Place a GGUF in ~/Models';
@@ -42,8 +42,10 @@ function renderDiscovery(data) {
     hideNotice();
   } else {
     select.innerHTML = '<option value="">No runtime online</option>';
-    $('#startRuntime').textContent = 'Start Saluki'; $('#startRuntime').disabled = false;
-    showNotice('Saluki was found, but no model runtime is online. Start it here to enable live token probabilities.');
+    $('#startRuntime').textContent = 'Start AI model'; $('#startRuntime').disabled = !model;
+    showNotice(model
+      ? 'An AI model was found, but no model runtime is online. Start it here to enable live token probabilities.'
+      : 'No local GGUF model was found. Add one to ~/Models, then rescan.');
   }
   renderAnatomy(model); renderRuntimes(data);
 }
@@ -268,7 +270,7 @@ async function generate() {
 
 async function refreshDiscovery() { try { renderDiscovery(await api('/api/discover')); await refreshTelemetry(); } catch (e) { showNotice(`Discovery failed: ${e.message}`); } }
 async function refreshTelemetry() { try { renderTelemetry(await api('/api/telemetry')); } catch {} }
-async function startRuntime() { const button=$('#startRuntime'); button.disabled=true; button.textContent='Starting…'; try { const result=await api('/api/runtime/start',{method:'POST',body:JSON.stringify({model_path:state.activeModel?.path})}); showNotice(`llama.cpp is ${result.state}. Loading a 27B model can take a minute; Bluso will reconnect automatically.`); let attempts=0; const poll=setInterval(async()=>{ attempts++; await refreshDiscovery(); if(state.discovery?.runtimes?.length||attempts>60)clearInterval(poll); },2000); } catch(e){showNotice(e.message);button.disabled=false;button.textContent='Start Saluki';} }
+async function startRuntime() { const button=$('#startRuntime'); button.disabled=true; button.textContent='Starting…'; try { const result=await api('/api/runtime/start',{method:'POST',body:JSON.stringify({model_path:state.activeModel?.path})}); showNotice(`llama.cpp is ${result.state}. Loading the selected AI model can take a minute; Bluso will reconnect automatically.`); let attempts=0; const poll=setInterval(async()=>{ attempts++; await refreshDiscovery(); if(state.discovery?.runtimes?.length||attempts>60)clearInterval(poll); },2000); } catch(e){showNotice(e.message);button.disabled=false;button.textContent='Start AI model';} }
 async function loadLogs() { try { const data=await api('/api/logs'); $('#logs').textContent=data.lines.join('\n')||'No runtime log output yet.'; $('#logs').scrollTop=$('#logs').scrollHeight; } catch(e){showNotice(e.message);} }
 
 $$('.nav-item').forEach(button=>button.addEventListener('click',()=>{ $$('.nav-item').forEach(n=>n.classList.remove('active')); button.classList.add('active'); $$('.view').forEach(n=>n.classList.remove('active')); $(`#view-${button.dataset.view}`).classList.add('active'); if(button.dataset.view==='logs')loadLogs(); }));

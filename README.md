@@ -1,6 +1,8 @@
 # Bluso
 
-Bluso is a local-first browser observatory for language models. It discovers local runtimes and GGUF models, launches your Saluki 27B model through llama.cpp, and shows real token probabilities, generation timing, context use, runtime slots, model metadata, and host resource use.
+Bluso is a local-first browser observatory for AI models. It discovers local runtimes and GGUF files, can launch any compatible model through llama.cpp, and shows real token probabilities, generation timing, context use, runtime slots, model metadata, and host resource use.
+
+This public project is model-agnostic: it does not require, prioritize, or assume a particular model family or parameter count. Use it with any model supported by one of the adapters below.
 
 ## Start on macOS or Linux
 
@@ -10,7 +12,7 @@ Bluso is a local-first browser observatory for language models. It discovers loc
 
 Bluso opens at `http://127.0.0.1:3417`. Everything stays on loopback. It uses only Python's standard library; no package install is required.
 
-Saluki defaults to a 4,096-token context to fit comfortably on a 16 GB Mac. Override it when needed with `BLUSO_CONTEXT=8192 ./bluso`.
+Launched AI models default to a 4,096-token context to fit comfortably on a 16 GB Mac. Override it when needed with `BLUSO_CONTEXT=8192 ./bluso`.
 
 To start only the dashboard without launching a model:
 

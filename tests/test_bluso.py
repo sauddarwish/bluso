@@ -4,10 +4,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bluso import GGUFReader, normalize_logprobs, parse_prometheus, summarize_gguf
+from bluso import GGUFReader, default_model, normalize_logprobs, parse_prometheus, summarize_gguf
 
 
 class BlusoTests(unittest.TestCase):
+    def test_default_model_uses_first_discovered_model(self):
+        discovery = {'models': [
+            {'name': 'model-a', 'path': '/models/a.gguf'},
+            {'name': 'model-b', 'path': '/models/b.gguf'},
+        ]}
+        self.assertEqual(default_model(discovery), '/models/a.gguf')
+
+    def test_default_model_handles_empty_discovery(self):
+        self.assertIsNone(default_model({'models': []}))
+
     def test_prometheus_parser(self):
         result = parse_prometheus('# HELP x\nllamacpp:predicted_tokens_seconds 12.5\nmetric{slot="0"} 3\n')
         self.assertEqual(result['llamacpp:predicted_tokens_seconds'], 12.5)
