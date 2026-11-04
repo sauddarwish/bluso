@@ -24,6 +24,7 @@ Useful flags:
 
 ```sh
 python3 bluso.py --auto-start --no-browser --port 3417
+python3 bluso.py --version
 ```
 
 ## Supported adapters

@@ -1,13 +1,24 @@
 import math
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from bluso import GGUFReader, default_model, normalize_logprobs, parse_prometheus, summarize_gguf
+from bluso import GGUFReader, __version__, default_model, normalize_logprobs, parse_prometheus, summarize_gguf
 
 
 class BlusoTests(unittest.TestCase):
+    def test_cli_reports_version(self):
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[1] / 'bluso.py'), '--version'],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.stdout.strip(), f'Bluso {__version__}')
+
     def test_default_model_uses_first_discovered_model(self):
         discovery = {'models': [
             {'name': 'model-a', 'path': '/models/a.gguf'},

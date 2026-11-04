@@ -34,6 +34,9 @@ STATIC = ROOT / "static"
 STATE_DIR = ROOT / ".bluso"
 STATE_DIR.mkdir(exist_ok=True)
 
+__version__ = "0.1.1"
+USER_AGENT = f"bluso/{__version__}"
+
 DEFAULT_LLAMA_PORTS = (8081, 9931, 8080)
 DEFAULT_OPENAI_PORTS = (1234, 8000, 5000, 5001, 4891, 1337)
 MODEL_SUFFIXES = {".gguf"}
@@ -61,7 +64,7 @@ def json_bytes(value: Any) -> bytes:
 
 
 def http_json(url: str, method: str = "GET", payload: Any = None, timeout: float = 1.2) -> Any:
-    headers = {"Accept": "application/json", "User-Agent": "bluso/0.1"}
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
     body = None
     if payload is not None:
         body = json_bytes(payload)
@@ -544,7 +547,7 @@ def parse_prometheus(text: str) -> Dict[str, float]:
 
 def fetch_text(url: str, timeout: float = 1.0) -> Optional[str]:
     try:
-        with urlopen(Request(url, headers={"User-Agent": "bluso/0.1"}), timeout=timeout) as response:
+        with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=timeout) as response:
             return response.read().decode("utf-8", errors="replace")
     except (OSError, HTTPError, URLError, TimeoutError):
         return None
@@ -605,7 +608,7 @@ def iter_sse(response) -> Iterable[Dict[str, Any]]:
 
 
 class BlusoHandler(BaseHTTPRequestHandler):
-    server_version = "Bluso/0.1"
+    server_version = f"Bluso/{__version__}"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("[%s] %s\n" % (self.log_date_time_string(), fmt % args))
@@ -649,7 +652,7 @@ class BlusoHandler(BaseHTTPRequestHandler):
         elif path == "/api/telemetry":
             self._json(telemetry())
         elif path == "/api/health":
-            self._json({"ok": True, "name": "Bluso", "version": "0.1.0", "time": now_ms()})
+            self._json({"ok": True, "name": "Bluso", "version": __version__, "time": now_ms()})
         elif path == "/api/logs":
             try:
                 lines = BOOT_LOG.read_text(errors="replace").splitlines()[-160:]
@@ -813,6 +816,7 @@ def open_browser(url: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Local-first LLM observability console")
+    parser.add_argument("--version", action="version", version=f"Bluso {__version__}")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=3417)
     parser.add_argument("--auto-start", action="store_true", help="Start the first discovered AI model with llama.cpp")
