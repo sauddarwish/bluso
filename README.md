@@ -20,6 +20,9 @@ To start only the dashboard without launching a model:
 python3 bluso.py
 ```
 
+When Bluso starts llama.cpp, the start button becomes a stop button. It only stops
+the process it launched; runtimes started outside Bluso are left alone.
+
 Useful flags:
 
 ```sh

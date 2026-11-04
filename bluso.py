@@ -34,7 +34,7 @@ STATIC = ROOT / "static"
 STATE_DIR = ROOT / ".bluso"
 STATE_DIR.mkdir(exist_ok=True)
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 USER_AGENT = f"bluso/{__version__}"
 
 DEFAULT_LLAMA_PORTS = (8081, 9931, 8080)
@@ -57,6 +57,10 @@ GGML_TYPE_NAMES = {
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def health_payload() -> Dict[str, Any]:
+    return {"ok": True, "name": "Bluso", "version": __version__, "time": now_ms()}
 
 
 def json_bytes(value: Any) -> bytes:
@@ -370,6 +374,7 @@ class Discovery:
     def discover(self, force: bool = False) -> Dict[str, Any]:
         with self.lock:
             if not force and self.cached and time.time() - self.updated < DISCOVERY_TTL:
+                self.cached["managed_runtime"] = managed_runtime_status()
                 return self.cached
             runtimes: List[Runtime] = []
             targets = [("auto", f"http://127.0.0.1:{port}") for port in dict.fromkeys(DEFAULT_LLAMA_PORTS + DEFAULT_OPENAI_PORTS)]
@@ -387,7 +392,8 @@ class Discovery:
             }
             self.cached = {
                 "runtimes": [asdict(item) for item in runtimes], "models": models,
-                "binaries": binaries, "updated_at": now_ms(),
+                "binaries": binaries, "managed_runtime": managed_runtime_status(),
+                "updated_at": now_ms(),
             }
             self.updated = time.time()
             return self.cached
@@ -399,6 +405,19 @@ RUNTIME_LOCK = threading.Lock()
 BOOT_LOG = STATE_DIR / "llama.log"
 
 
+def managed_runtime_status() -> Dict[str, Any]:
+    process = RUNTIME_PROCESS
+    if process is None:
+        return {"managed": False, "running": False}
+    exit_code = process.poll()
+    return {
+        "managed": True,
+        "running": exit_code is None,
+        "pid": process.pid,
+        "exit_code": exit_code,
+    }
+
+
 def default_model(discovery: Optional[Dict[str, Any]] = None) -> Optional[str]:
     data = discovery or DISCOVERY.discover()
     models = data.get("models", [])
@@ -408,6 +427,10 @@ def default_model(discovery: Optional[Dict[str, Any]] = None) -> Optional[str]:
 def start_llamacpp(model_path: Optional[str] = None, port: int = 8081) -> Dict[str, Any]:
     global RUNTIME_PROCESS
     with RUNTIME_LOCK:
+        if RUNTIME_PROCESS is not None:
+            if RUNTIME_PROCESS.poll() is None:
+                return {"ok": True, "state": "already-starting", "pid": RUNTIME_PROCESS.pid}
+            RUNTIME_PROCESS = None
         if port_open("127.0.0.1", port):
             return {"ok": True, "state": "already-running", "url": f"http://127.0.0.1:{port}"}
         discovery = DISCOVERY.discover(force=True)
@@ -442,6 +465,50 @@ def start_llamacpp(model_path: Optional[str] = None, port: int = 8081) -> Dict[s
                     "log": str(BOOT_LOG)}
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
+
+
+def stop_llamacpp(timeout: float = 8.0) -> Dict[str, Any]:
+    global RUNTIME_PROCESS
+    with RUNTIME_LOCK:
+        process = RUNTIME_PROCESS
+        if process is None:
+            return {"ok": False, "state": "not-managed",
+                    "error": "Bluso did not start the active runtime"}
+        exit_code = process.poll()
+        if exit_code is not None:
+            RUNTIME_PROCESS = None
+            DISCOVERY.updated = 0
+            return {"ok": True, "state": "already-stopped", "pid": process.pid,
+                    "exit_code": exit_code}
+
+        forced = False
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            return {"ok": False, "state": "stop-failed", "error": str(exc)}
+
+        try:
+            exit_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            forced = True
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError as exc:
+                return {"ok": False, "state": "stop-failed", "error": str(exc)}
+            try:
+                exit_code = process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                return {"ok": False, "state": "stop-failed",
+                        "error": "The managed runtime did not exit"}
+
+        RUNTIME_PROCESS = None
+        DISCOVERY.updated = 0
+        return {"ok": True, "state": "stopped", "pid": process.pid,
+                "exit_code": exit_code, "forced": forced}
 
 
 class SystemSampler:
@@ -652,7 +719,7 @@ class BlusoHandler(BaseHTTPRequestHandler):
         elif path == "/api/telemetry":
             self._json(telemetry())
         elif path == "/api/health":
-            self._json({"ok": True, "name": "Bluso", "version": __version__, "time": now_ms()})
+            self._json(health_payload())
         elif path == "/api/logs":
             try:
                 lines = BOOT_LOG.read_text(errors="replace").splitlines()[-160:]
@@ -685,6 +752,9 @@ class BlusoHandler(BaseHTTPRequestHandler):
         if path == "/api/runtime/start":
             result = start_llamacpp(body.get("model_path"), int(body.get("port", 8081)))
             self._json(result, 200 if result.get("ok") else 400)
+        elif path == "/api/runtime/stop":
+            result = stop_llamacpp()
+            self._json(result, 200 if result.get("ok") else 409)
         elif path == "/api/generate":
             self._generate(body)
         else:

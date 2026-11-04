@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const state = { discovery: null, telemetry: null, running: false, replaying: false, frozen: false, speed: Array(30).fill(0), tokens: [], trace: [], activeModel: null };
+const state = { discovery: null, telemetry: null, running: false, replaying: false, frozen: false, speed: Array(30).fill(0), tokens: [], trace: [], activeModel: null, startPoll: null };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -34,15 +34,24 @@ function renderDiscovery(data) {
   $('#modelName').textContent = model?.display_name || model?.name || 'No GGUF found';
   $('#modelMeta').textContent = model ? `${model.size} · ${model.architecture || 'GGUF'}` : 'Place a GGUF in ~/Models';
   const select = $('#runtimeSelect');
+  const button = $('#startRuntime');
+  const managedRunning = Boolean(data.managed_runtime?.running);
+  button.dataset.action = managedRunning ? 'stop' : 'start';
+  button.classList.toggle('stop-button', managedRunning);
   const previous = select.value;
   if (data.runtimes?.length) {
     select.innerHTML = data.runtimes.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)} · ${escapeHtml(new URL(r.base_url).port)}</option>`).join('');
     if (data.runtimes.some(r => r.id === previous)) select.value = previous;
-    $('#startRuntime').textContent = 'Runtime online'; $('#startRuntime').disabled = true;
+    button.textContent = managedRunning ? 'Stop AI model' : 'Runtime online';
+    button.disabled = !managedRunning;
     hideNotice();
+  } else if (managedRunning) {
+    select.innerHTML = '<option value="">Runtime starting…</option>';
+    button.textContent = 'Stop starting model'; button.disabled = false;
+    showNotice('Bluso is loading the selected AI model. You can stop it while it starts.');
   } else {
     select.innerHTML = '<option value="">No runtime online</option>';
-    $('#startRuntime').textContent = 'Start AI model'; $('#startRuntime').disabled = !model;
+    button.textContent = 'Start AI model'; button.disabled = !model;
     showNotice(model
       ? 'An AI model was found, but no model runtime is online. Start it here to enable live token probabilities.'
       : 'No local GGUF model was found. Add one to ~/Models, then rescan.');
@@ -270,15 +279,48 @@ async function generate() {
 
 async function refreshDiscovery() { try { renderDiscovery(await api('/api/discover')); await refreshTelemetry(); } catch (e) { showNotice(`Discovery failed: ${e.message}`); } }
 async function refreshTelemetry() { try { renderTelemetry(await api('/api/telemetry')); } catch {} }
-async function startRuntime() { const button=$('#startRuntime'); button.disabled=true; button.textContent='Starting…'; try { const result=await api('/api/runtime/start',{method:'POST',body:JSON.stringify({model_path:state.activeModel?.path})}); showNotice(`llama.cpp is ${result.state}. Loading the selected AI model can take a minute; Bluso will reconnect automatically.`); let attempts=0; const poll=setInterval(async()=>{ attempts++; await refreshDiscovery(); if(state.discovery?.runtimes?.length||attempts>60)clearInterval(poll); },2000); } catch(e){showNotice(e.message);button.disabled=false;button.textContent='Start AI model';} }
+async function loadAppVersion() { try { const data = await api('/api/health'); $('#appVersion').textContent = `v${data.version}`; } catch { $('#appVersion').textContent = ''; } }
+async function startRuntime() {
+  const button = $('#startRuntime'); button.disabled = true; button.textContent = 'Starting…';
+  try {
+    const result = await api('/api/runtime/start', {method:'POST', body:JSON.stringify({model_path:state.activeModel?.path})});
+    showNotice(`llama.cpp is ${result.state}. Loading the selected AI model can take a minute; Bluso will reconnect automatically.`);
+    let attempts = 0;
+    if (state.startPoll) clearInterval(state.startPoll);
+    state.startPoll = setInterval(async () => {
+      attempts++; await refreshDiscovery();
+      if (state.discovery?.runtimes?.length || !state.discovery?.managed_runtime?.running || attempts > 60) {
+        clearInterval(state.startPoll); state.startPoll = null;
+      }
+    }, 2000);
+    await refreshDiscovery();
+  } catch (e) {
+    showNotice(e.message); button.disabled = false; button.textContent = 'Start AI model';
+  }
+}
+async function stopRuntime() {
+  const button = $('#startRuntime'); button.disabled = true; button.textContent = 'Stopping…';
+  if (state.startPoll) { clearInterval(state.startPoll); state.startPoll = null; }
+  let message;
+  try {
+    const result = await api('/api/runtime/stop', {method:'POST', body:'{}'});
+    message = result.forced ? 'The AI model was force-stopped.' : 'The AI model was stopped.';
+  } catch (e) {
+    message = e.message;
+  } finally {
+    await refreshDiscovery();
+    showNotice(message);
+  }
+}
+function handleRuntimeAction() { return $('#startRuntime').dataset.action === 'stop' ? stopRuntime() : startRuntime(); }
 async function loadLogs() { try { const data=await api('/api/logs'); $('#logs').textContent=data.lines.join('\n')||'No runtime log output yet.'; $('#logs').scrollTop=$('#logs').scrollHeight; } catch(e){showNotice(e.message);} }
 
 $$('.nav-item').forEach(button=>button.addEventListener('click',()=>{ $$('.nav-item').forEach(n=>n.classList.remove('active')); button.classList.add('active'); $$('.view').forEach(n=>n.classList.remove('active')); $(`#view-${button.dataset.view}`).classList.add('active'); if(button.dataset.view==='logs')loadLogs(); }));
 $('#temperature').addEventListener('input',e=>$('#tempValue').textContent=Number(e.target.value).toFixed(2)); $('#maxTokens').addEventListener('input',e=>$('#tokensValue').textContent=e.target.value);
 $('#generateButton').addEventListener('click',generate); $('#prompt').addEventListener('keydown',e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')generate();});
 $('#replayButton').addEventListener('click',replayTrace);
-$('#refreshButton').addEventListener('click',refreshDiscovery); $('#startRuntime').addEventListener('click',startRuntime); $('#noticeClose').addEventListener('click',hideNotice); $('#reloadLogs').addEventListener('click',loadLogs);
+$('#refreshButton').addEventListener('click',refreshDiscovery); $('#startRuntime').addEventListener('click',handleRuntimeAction); $('#noticeClose').addEventListener('click',hideNotice); $('#reloadLogs').addEventListener('click',loadLogs);
 $('#freezeProb').addEventListener('click',()=>{state.frozen=!state.frozen;$('#freezeProb').textContent=state.frozen?'▶':'Ⅱ';}); $('#runtimeSelect').addEventListener('change',refreshTelemetry);
 $('#tensorSearch').addEventListener('input', renderTensorTable); $('#tensorTypeFilter').addEventListener('change', renderTensorTable);
 renderContextMeter(0); $('#probList').innerHTML=Array.from({length:10},(_,i)=>`<li><span>${String(i+1).padStart(2,'0')}</span><code>—</code><div class="prob-bar"><i></i></div><b>0.00%</b></li>`).join('');
-refreshDiscovery(); setInterval(()=>{ if(!state.running&&!state.replaying)refreshTelemetry(); },3000); setInterval(()=>{ if(!state.running&&!state.replaying&&!state.discovery?.runtimes?.length)refreshDiscovery(); },7000);
+loadAppVersion(); refreshDiscovery(); setInterval(()=>{ if(!state.running&&!state.replaying)refreshTelemetry(); },3000); setInterval(()=>{ if(!state.running&&!state.replaying&&!state.discovery?.runtimes?.length)refreshDiscovery(); },7000);

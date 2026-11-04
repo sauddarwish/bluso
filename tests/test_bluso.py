@@ -5,11 +5,70 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from bluso import GGUFReader, __version__, default_model, normalize_logprobs, parse_prometheus, summarize_gguf
+import bluso
+from bluso import (GGUFReader, __version__, default_model, health_payload,
+                   managed_runtime_status, normalize_logprobs, parse_prometheus,
+                   start_llamacpp, stop_llamacpp, summarize_gguf)
 
 
 class BlusoTests(unittest.TestCase):
+    def test_managed_runtime_status_without_process(self):
+        with mock.patch.object(bluso, 'RUNTIME_PROCESS', None):
+            self.assertEqual(managed_runtime_status(), {'managed': False, 'running': False})
+
+    def test_start_does_not_duplicate_managed_runtime(self):
+        process = mock.Mock(pid=4242)
+        process.poll.return_value = None
+        with mock.patch.object(bluso, 'RUNTIME_PROCESS', process):
+            result = start_llamacpp()
+        self.assertEqual(result, {'ok': True, 'state': 'already-starting', 'pid': 4242})
+
+    def test_stop_rejects_unmanaged_runtime(self):
+        with mock.patch.object(bluso, 'RUNTIME_PROCESS', None):
+            result = stop_llamacpp()
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['state'], 'not-managed')
+
+    def test_stop_managed_runtime_terminates_process_group(self):
+        class FakeProcess:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                self.timeout = timeout
+                return 0
+
+        process = FakeProcess()
+        with mock.patch.object(bluso, 'RUNTIME_PROCESS', process), mock.patch.object(bluso.os, 'killpg') as killpg:
+            result = stop_llamacpp(timeout=0.1)
+            killpg.assert_called_once_with(process.pid, bluso.signal.SIGTERM)
+            self.assertEqual(result['state'], 'stopped')
+            self.assertFalse(result['forced'])
+            self.assertIsNone(bluso.RUNTIME_PROCESS)
+
+    def test_stop_force_kills_runtime_after_timeout(self):
+        process = mock.Mock(pid=4242)
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired('llama-server', 0.1), -9]
+        with mock.patch.object(bluso, 'RUNTIME_PROCESS', process), mock.patch.object(bluso.os, 'killpg') as killpg:
+            result = stop_llamacpp(timeout=0.1)
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(process.pid, bluso.signal.SIGTERM), mock.call(process.pid, bluso.signal.SIGKILL)],
+        )
+        self.assertTrue(result['forced'])
+        self.assertEqual(result['exit_code'], -9)
+
+    def test_health_payload_reports_current_version(self):
+        payload = health_payload()
+        self.assertTrue(payload['ok'])
+        self.assertEqual(payload['version'], __version__)
+        self.assertIsInstance(payload['time'], int)
+
     def test_cli_reports_version(self):
         result = subprocess.run(
             [sys.executable, str(Path(__file__).parents[1] / 'bluso.py'), '--version'],
